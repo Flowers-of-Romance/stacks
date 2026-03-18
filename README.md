@@ -63,7 +63,7 @@ stacks remove 1
 | PDF | pdfminer.six（CJK対応） |
 | PPTX | python-pptx（オートシェイプ・テーブル含む） |
 | DOCX | python-docx（段落・テーブル） |
-| XLSX | openpyxl（シートごとに1ページ） |
+| XLSX | openpyxl + drawing XML（シートごとに1ページ、オートシェイプ含む） |
 
 ## 設定
 
