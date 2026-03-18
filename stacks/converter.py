@@ -178,9 +178,16 @@ def _extract_xlsx(filepath: Path) -> list[str]:
     import openpyxl
 
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+
+    # Extract AutoShape text per sheet from drawing XML
+    shape_texts = _extract_xlsx_shapes(filepath, len(sheet_names))
+
+    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
     pages = []
     try:
-        for name in wb.sheetnames:
+        for idx, name in enumerate(wb.sheetnames):
             ws = wb[name]
             lines = [f"[Sheet: {name}]"]
             for row in ws.iter_rows(values_only=True):
@@ -188,10 +195,57 @@ def _extract_xlsx(filepath: Path) -> list[str]:
                 line = " | ".join(cells).strip()
                 if line and line != "| " * (len(cells) - 1):
                     lines.append(line)
+            # Append AutoShape text if any
+            if idx in shape_texts and shape_texts[idx]:
+                lines.append("[AutoShape]")
+                lines.append(shape_texts[idx])
             pages.append("\n".join(lines))
     finally:
         wb.close()
     return pages
+
+
+def _extract_xlsx_shapes(filepath: Path, sheet_count: int) -> dict[int, str]:
+    """Extract text from AutoShapes in xlsx via drawing XML.
+
+    Returns {sheet_index: text} mapping.
+    """
+    import re
+    import zipfile
+
+    result = {}
+    try:
+        zf = zipfile.ZipFile(filepath)
+    except zipfile.BadZipFile:
+        return result
+
+    # Build sheet_number -> drawing_file mapping from .rels
+    sheet_to_drawing = {}
+    for name in zf.namelist():
+        if "worksheets/_rels/sheet" in name and name.endswith(".rels"):
+            content = zf.read(name).decode("utf-8", errors="replace")
+            for m in re.finditer(r'Target="([^"]*drawing[^"]*)"', content):
+                # Extract sheet number from filename
+                sheet_match = re.search(r"sheet(\d+)", name)
+                if sheet_match:
+                    sheet_num = int(sheet_match.group(1))
+                    drawing_path = "xl/drawings/" + m.group(1).split("/")[-1]
+                    sheet_to_drawing[sheet_num] = drawing_path
+
+    # Extract text from each drawing
+    for sheet_num, drawing_path in sheet_to_drawing.items():
+        if drawing_path not in zf.namelist():
+            continue
+        content = zf.read(drawing_path).decode("utf-8", errors="replace")
+        texts = re.findall(r"<a:t>([^<]+)</a:t>", content)
+        if texts:
+            # sheet number (1-based) to index (0-based)
+            sheet_idx = sheet_num - 1
+            if 0 <= sheet_idx < sheet_count:
+                result[sheet_idx] = " ".join(texts)
+
+    zf.close()
+    return result
 
 
 def _extract_pdf(filepath: Path) -> list[str]:
