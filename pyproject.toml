@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stacks"
+version = "0.1.0"
+description = "Document ingestion and semantic search via Claude Code + SQLite"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "sentence-transformers",
+    "sqlite-vec",
+    "openpyxl",
+    "pdfminer.six",
+    "python-pptx",
+    "python-docx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+stacks = "stacks.cli:main"
