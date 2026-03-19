@@ -158,6 +158,9 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    import sys
+    import io
+
     parser = create_parser()
     args = parser.parse_args()
 
@@ -165,15 +168,24 @@ def main():
         parser.print_help()
         return
 
-    handlers = {
-        "init": cmd_init,
-        "prepare": cmd_prepare,
-        "ingest": cmd_ingest,
-        "store": cmd_store,
-        "search": cmd_search,
-        "list": cmd_list,
-        "remove": cmd_remove,
-        "quality": cmd_quality,
-        "info": cmd_info,
-    }
-    handlers[args.command](args)
+    # Suppress noisy torch/safetensors stderr during model loading
+    original_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        handlers = {
+            "init": cmd_init,
+            "prepare": cmd_prepare,
+            "ingest": cmd_ingest,
+            "store": cmd_store,
+            "search": cmd_search,
+            "list": cmd_list,
+            "remove": cmd_remove,
+            "quality": cmd_quality,
+            "info": cmd_info,
+        }
+        handlers[args.command](args)
+    except Exception as e:
+        sys.stderr = original_stderr
+        raise
+    finally:
+        sys.stderr = original_stderr
