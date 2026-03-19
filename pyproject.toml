@@ -22,5 +22,8 @@ dev = [
     "pytest",
 ]
 
+[tool.setuptools.packages.find]
+include = ["stacks"]
+
 [project.scripts]
 stacks = "stacks.cli:main"
