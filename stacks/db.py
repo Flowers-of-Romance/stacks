@@ -60,6 +60,13 @@ def init_db(conn: sqlite3.Connection) -> None:
             page_id INTEGER PRIMARY KEY,
             embedding FLOAT[{EMBEDDING_DIM}]
         );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+            content,
+            content='pages',
+            content_rowid='id',
+            tokenize='unicode61'
+        );
     """)
     conn.commit()
 
@@ -110,8 +117,14 @@ def insert_page(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (doc_id, page_num, sheet_name, content, summary, content_type, token_count, quality_score),
     )
+    page_id = cur.lastrowid
+    # Sync FTS index
+    conn.execute(
+        "INSERT INTO pages_fts (rowid, content) VALUES (?, ?)",
+        (page_id, content),
+    )
     conn.commit()
-    return cur.lastrowid
+    return page_id
 
 
 def _serialize_embedding(embedding: list[float]) -> bytes:
@@ -137,9 +150,10 @@ def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
             "SELECT id FROM pages WHERE doc_id = ?", (doc_id,)
         ).fetchall()
     ]
-    # Delete from pages_vec (virtual table, no CASCADE)
+    # Delete from virtual tables (no CASCADE)
     for pid in page_ids:
         conn.execute("DELETE FROM pages_vec WHERE page_id = ?", (pid,))
+        conn.execute("DELETE FROM pages_fts WHERE rowid = ?", (pid,))
     # Delete document (CASCADE deletes pages)
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
     conn.commit()
@@ -162,6 +176,33 @@ def get_document_info(conn: sqlite3.Connection, doc_id: int) -> dict | None:
         "SELECT * FROM pages WHERE doc_id = ? ORDER BY page_num", (doc_id,)
     ).fetchall()
     return {"document": dict(doc), "pages": [dict(p) for p in pages]}
+
+
+def search_fts(
+    conn: sqlite3.Connection, query: str, limit: int = 20
+) -> list[dict]:
+    """Full-text search using FTS5. Returns pages with BM25 rank."""
+    rows = conn.execute(
+        """
+        SELECT
+            p.id AS page_id,
+            rank AS fts_rank,
+            p.doc_id,
+            p.page_num,
+            p.content,
+            p.summary,
+            d.filename,
+            d.filepath
+        FROM pages_fts
+        JOIN pages p ON p.id = pages_fts.rowid
+        JOIN documents d ON d.id = p.doc_id
+        WHERE pages_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (query, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def search_similar(

@@ -27,8 +27,34 @@ def get_model() -> SentenceTransformer:
     return _model
 
 
+def _try_server(payload: dict) -> dict | None:
+    """Try to get embedding from running server. Returns None if unavailable."""
+    import urllib.request
+    import json
+    from stacks.server import DEFAULT_PORT
+
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{DEFAULT_PORT}/embed",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
+
+
 def embed_text(text: str) -> list[float]:
-    """Embed a single text and return a 384-dim float list."""
+    """Embed a single text and return a 384-dim float list.
+
+    Uses the embedding server if running, otherwise loads model directly.
+    """
+    result = _try_server({"text": text})
+    if result and "embedding" in result:
+        return result["embedding"]
+
     model = get_model()
     embedding = model.encode(text, normalize_embeddings=True)
     return embedding.tolist()
@@ -36,6 +62,10 @@ def embed_text(text: str) -> list[float]:
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """Embed multiple texts in a batch."""
+    result = _try_server({"texts": texts})
+    if result and "embeddings" in result:
+        return result["embeddings"]
+
     model = get_model()
     embeddings = model.encode(texts, normalize_embeddings=True)
     return [e.tolist() for e in embeddings]

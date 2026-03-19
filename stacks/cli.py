@@ -70,7 +70,7 @@ def cmd_search(args):
     conn = get_connection()
     results = search(conn, args.query, limit=args.limit)
     conn.close()
-    print(format_results(results))
+    print(format_results(results, query=args.query))
 
 
 def cmd_list(args):
@@ -115,6 +115,11 @@ def cmd_quality(args):
         print(f"{'':>23} {preview}")
 
 
+def cmd_serve(args):
+    from stacks.server import start_server
+    start_server(port=args.port)
+
+
 def cmd_info(args):
     from stacks.manage import cmd_info as do_info
     conn = get_connection()
@@ -148,6 +153,9 @@ def create_parser() -> argparse.ArgumentParser:
     p_remove = sub.add_parser("remove", help="Remove a document and all its pages")
     p_remove.add_argument("file_id", type=int, help="Document ID to remove")
 
+    p_serve = sub.add_parser("serve", help="Start embedding server for fast repeated queries")
+    p_serve.add_argument("--port", type=int, default=7823, help="Port (default: 7823)")
+
     p_quality = sub.add_parser("quality", help="List low-quality pages")
     p_quality.add_argument("--threshold", type=float, default=0.5, help="Quality threshold (default: 0.5)")
 
@@ -180,6 +188,7 @@ def main():
             "search": cmd_search,
             "list": cmd_list,
             "remove": cmd_remove,
+            "serve": cmd_serve,
             "quality": cmd_quality,
             "info": cmd_info,
         }
