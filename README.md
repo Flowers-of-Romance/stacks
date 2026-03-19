@@ -12,35 +12,72 @@
 ## セットアップ
 
 ```bash
+git clone https://github.com/Flowers-of-Romance/stacks.git
+cd stacks
 pip install -e .
-pip install python-pptx python-docx pdfminer.six
 ```
+
+依存パッケージ（`sentence-transformers`, `sqlite-vec`, `openpyxl`, `pdfminer.six`, `python-pptx`, `python-docx`）は `pip install -e .` で自動インストールされる。
+
+初回のembedding計算時にモデル（multilingual-e5-small, 約100MB）が自動ダウンロードされる。
 
 ## 使い方
 
-```bash
-# データベース初期化
-stacks init
+### 1. 初期化
 
-# ファイルを一括取り込み（テキスト抽出 → embedding → 保存）
+```bash
+stacks init
+```
+
+`stacks.db`がカレントディレクトリに作成される。`STACKS_ROOT`環境変数で場所を変更可能。
+
+### 2. ドキュメントの取り込み
+
+```bash
+# ディレクトリ配下を一括取り込み
 stacks ingest docs/
 
-# 意味検索
-stacks search "暇"
+# 単一ファイル
+stacks ingest report.pdf
+```
 
+処理の流れ: ファイル検出 → テキスト抽出（ページ単位）→ embedding計算 → SQLiteに保存。
+
+1000ページを超えるファイルは自動でスキップされる。同一ファイル（SHA-256ハッシュで判定）は重複取り込みしない。
+
+### 3. 検索
+
+```bash
+stacks search "座席配置"
+stacks search "getchar関数の使い方" --limit 10
+```
+
+クエリをembeddingに変換し、sqlite-vecでコサイン距離の近いページを返す。完全一致ではなく意味的に近いページがヒットする。
+
+### 4. 管理
+
+```bash
 # 取り込み済みドキュメント一覧
 stacks list
 
-# ドキュメント詳細
+# ドキュメント詳細（ページ一覧）
 stacks info 1
 
-# 低品質ページの確認
-stacks quality                  # スコア 0.5 未満
-stacks quality --threshold 0.7  # スコア 0.7 未満
-
-# ドキュメント削除
+# ドキュメント削除（ページ・embeddingも削除）
 stacks remove 1
 ```
+
+### 5. 品質チェック
+
+```bash
+# 品質スコア 0.5 未満のページを表示
+stacks quality
+
+# 閾値を変更
+stacks quality --threshold 0.7
+```
+
+取り込み時にページごとの品質スコア（0.0〜1.0）を自動計算・記録している。文字化けや内容が薄いページを後から特定できる。
 
 ## コマンド一覧
 
