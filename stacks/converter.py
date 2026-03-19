@@ -199,7 +199,13 @@ def _extract_xlsx(filepath: Path) -> list[str]:
             if idx in shape_texts and shape_texts[idx]:
                 lines.append("[AutoShape]")
                 lines.append(shape_texts[idx])
-            pages.append("\n".join(lines))
+            sheet_text = "\n".join(lines)
+            # Large sheets: chunk into ~2000 char pages for better search
+            if len(sheet_text) > 3000:
+                chunks = _chunk_text(sheet_text, 2000)
+                pages.extend(chunks)
+            else:
+                pages.append(sheet_text)
     finally:
         wb.close()
     return pages
@@ -268,6 +274,42 @@ def _extract_pdf(filepath: Path) -> list[str]:
             device.close()
             output.close()
     return pages
+
+
+def render_page_images(
+    pdf_path: str | Path, output_dir: str | Path, doc_id: int
+) -> list[Path]:
+    """Render each page of a PDF as a PNG thumbnail (width ~600px).
+
+    Saves to output_dir/<doc_id>/<page_num>.png (1-indexed).
+    Returns a list of generated image paths.
+    """
+    import fitz  # PyMuPDF
+
+    pdf_path = Path(pdf_path)
+    output_dir = Path(output_dir) / str(doc_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Suppress MuPDF warnings (e.g. structure tree errors from LibreOffice PDFs)
+    fitz.TOOLS.mupdf_display_errors(False)
+    fitz.TOOLS.mupdf_display_warnings(False)
+    try:
+        doc = fitz.open(pdf_path)
+        paths = []
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            # Scale to ~600px width
+            zoom = 600.0 / page.rect.width if page.rect.width > 0 else 1.0
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            out_path = output_dir / f"{page_num + 1}.png"
+            pix.save(str(out_path))
+            paths.append(out_path)
+        doc.close()
+    finally:
+        fitz.TOOLS.mupdf_display_errors(True)
+        fitz.TOOLS.mupdf_display_warnings(True)
+    return paths
 
 
 def _chunk_text(text: str, chunk_size: int) -> list[str]:

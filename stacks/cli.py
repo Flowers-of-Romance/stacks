@@ -8,10 +8,25 @@ from stacks.config import get_db_path
 
 
 def cmd_init(args):
+    import shutil
+    db_path = get_db_path()
+    if args.reset and db_path.exists():
+        db_path.unlink()
+        # Clean up WAL/SHM files
+        for suffix in ("-wal", "-shm"):
+            p = db_path.parent / (db_path.name + suffix)
+            if p.exists():
+                p.unlink()
+        # Clean up generated images
+        from stacks.config import get_images_dir, get_stacks_root
+        images_dir = get_stacks_root() / ".stacks" / "images"
+        if images_dir.exists():
+            shutil.rmtree(images_dir)
+        print(f"Removed existing database and images.")
     conn = get_connection()
     init_db(conn)
     conn.close()
-    print(f"Initialized stacks database at {get_db_path()}")
+    print(f"Initialized stacks database at {db_path}")
 
 
 def cmd_prepare(args):
@@ -29,16 +44,29 @@ def cmd_ingest(args):
     conn = get_connection()
     init_db(conn)
 
-    def progress(page, total):
-        print(f"\r  {page}/{total}", end="", flush=True)
+    def progress(phase, current, total, extra=None):
+        if phase == "file":
+            # current=filename, total=total_files, extra=file_idx
+            print(f"\n[{extra}/{total}] {current}", flush=True)
+        elif phase == "extract":
+            print(f"\r  extracting text...", end="", flush=True)
+        elif phase == "images":
+            print(f"\r  generating images...", end="", flush=True)
+        elif phase == "images_done":
+            print(f"\r  images: {current} pages    ", end="", flush=True)
+        elif phase == "embed":
+            print(f"\r  embed: {current}/{total}", end="", flush=True)
 
-    result = ingest_all(conn, args.path, on_progress=progress)
+    result = ingest_all(conn, args.path, on_progress=progress, generate_images=not args.no_images)
     conn.close()
 
+    print()
     for item in result["ingested"]:
-        print(f"\n  {item['original']}: {item['pages_ingested']}/{item['total_pages']} pages")
+        print(f"  {item['original']}: {item['pages_ingested']}/{item['total_pages']} pages")
     if result["skipped"]:
         print(f"\nSkipped: {len(result['skipped'])} files")
+        for s in result["skipped"]:
+            print(f"  {s['file']}: {s['reason']}")
     total_pages = sum(item["pages_ingested"] for item in result["ingested"])
     print(f"\nDone. {total_pages} pages ingested from {len(result['ingested'])} documents.")
 
@@ -66,11 +94,31 @@ def cmd_store(args):
 
 
 def cmd_search(args):
-    from stacks.search import search, format_results
+    from stacks.search import search, format_results, format_results_html
     conn = get_connection()
     results = search(conn, args.query, limit=args.limit)
     conn.close()
+
+    # Always print text results
     print(format_results(results, query=args.query))
+
+    if not results:
+        return
+
+    # Always generate HTML
+    import re
+    from stacks.config import get_stacks_root
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', args.query)[:80].strip()
+    out = get_stacks_root() / ".stacks" / f"search_{safe_name}.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(format_results_html(results, query=args.query), encoding="utf-8")
+
+    has_images = any(r.image_path for r in results)
+    if has_images and not args.no_browser:
+        import webbrowser
+        webbrowser.open(str(out))
+    else:
+        print(f"HTML: {out}")
 
 
 def cmd_list(args):
@@ -131,13 +179,15 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stacks", description="Document ingestion and semantic search")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("init", help="Initialize the database")
+    p_init = sub.add_parser("init", help="Initialize the database")
+    p_init.add_argument("--reset", action="store_true", help="Delete existing database and start fresh")
 
     p_prepare = sub.add_parser("prepare", help="Discover and prepare files for ingestion")
     p_prepare.add_argument("path", help="File or directory path (relative to STACKS_ROOT)")
 
     p_ingest = sub.add_parser("ingest", help="Prepare and ingest all files (bulk)")
     p_ingest.add_argument("path", help="File or directory path")
+    p_ingest.add_argument("--no-images", action="store_true", help="Skip page image generation")
 
     p_store = sub.add_parser("store", help="Store a page with content and embedding")
     p_store.add_argument("doc_id", type=int, help="Document ID")
@@ -147,6 +197,7 @@ def create_parser() -> argparse.ArgumentParser:
     p_search = sub.add_parser("search", help="Search documents by natural language query")
     p_search.add_argument("query", help="Search query")
     p_search.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
+    p_search.add_argument("--no-browser", action="store_true", help="Don't auto-open browser for HTML report")
 
     sub.add_parser("list", help="List ingested documents")
 

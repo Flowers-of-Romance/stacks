@@ -68,6 +68,12 @@ def init_db(conn: sqlite3.Connection) -> None:
             tokenize='unicode61'
         );
     """)
+    # Migrate: add image_path column if missing
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(pages)").fetchall()]
+    if "image_path" not in cols:
+        conn.execute("ALTER TABLE pages ADD COLUMN image_path TEXT")
+        conn.commit()
+
     conn.commit()
 
 
@@ -110,12 +116,13 @@ def insert_page(
     token_count: int | None,
     sheet_name: str | None = None,
     quality_score: float | None = None,
+    image_path: str | None = None,
 ) -> int:
     """Insert a page record and return its id."""
     cur = conn.execute(
-        """INSERT INTO pages (doc_id, page_num, sheet_name, content, summary, content_type, token_count, quality_score)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (doc_id, page_num, sheet_name, content, summary, content_type, token_count, quality_score),
+        """INSERT INTO pages (doc_id, page_num, sheet_name, content, summary, content_type, token_count, quality_score, image_path)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (doc_id, page_num, sheet_name, content, summary, content_type, token_count, quality_score, image_path),
     )
     page_id = cur.lastrowid
     # Sync FTS index
@@ -191,6 +198,7 @@ def search_fts(
             p.page_num,
             p.content,
             p.summary,
+            p.image_path,
             d.filename,
             d.filepath
         FROM pages_fts
@@ -218,6 +226,7 @@ def search_similar(
             p.page_num,
             p.content,
             p.summary,
+            p.image_path,
             d.filename,
             d.filepath
         FROM pages_vec pv
