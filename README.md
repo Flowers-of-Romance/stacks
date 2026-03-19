@@ -48,8 +48,8 @@ stacks ingest report.pdf
 ### 3. 検索
 
 ```bash
-stacks search "座席配置"
-stacks search "getchar関数の使い方" --limit 10
+stacks search "政府相互運⽤性フレームワーク"
+stacks search "フォローアップの実施" --limit 10
 ```
 
 ベクトル類似度と全文検索を組み合わせたハイブリッド検索。意味的に近いページも、キーワードが一致するページもヒットする。スコアは1.0に近いほど関連度が高い。
