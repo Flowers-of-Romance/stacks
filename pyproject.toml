@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stacks"
-version = "0.0.3"
-description = "Document ingestion and semantic search via Claude Code + SQLite"
+version = "0.0.4"
+description = "Ingesting documents (PDF/PPTX/DOCX/XLSX) into SQLite with semantic search via embeddings"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
@@ -15,6 +15,7 @@ dependencies = [
     "pdfminer.six",
     "python-pptx",
     "python-docx",
+    "pymupdf",
 ]
 
 [project.optional-dependencies]

@@ -5,7 +5,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from stacks.config import get_stacks_root, get_converted_dir
+from stacks.config import get_stacks_root, get_converted_dir, get_images_dir
 from stacks.converter import is_supported_format, check_excel_limits, convert_to_pdf, get_page_count
 from stacks.db import insert_document, find_document_by_hash, insert_page, insert_embedding
 from stacks.embedder import embed_text
@@ -19,6 +19,7 @@ def store_page(
     summary: str | None,
     content_type: str | None = None,
     sheet_name: str | None = None,
+    image_path: str | None = None,
 ) -> int:
     """Store a page and its embedding. Returns page_id."""
     if content_type is None:
@@ -29,7 +30,7 @@ def store_page(
     page_id = insert_page(
         conn, doc_id, page_num, content, summary,
         content_type, token_count, sheet_name=sheet_name,
-        quality_score=quality,
+        quality_score=quality, image_path=image_path,
     )
 
     embedding = embed_text(content)
@@ -200,7 +201,48 @@ def _extract_page_text(pdf_path: Path, page_num: int) -> str:
     return reader.pages[page_num - 1].extract_text() or ""
 
 
-MAX_INGEST_PAGES = 1000
+def _generate_page_images(source_path: Path, doc_id: int, on_progress=None) -> dict[int, str]:
+    """Generate page images for a document. Returns {page_num: image_path} mapping."""
+    from stacks.converter import render_page_images
+
+    root = get_stacks_root()
+    images_dir = get_images_dir()
+    fmt = source_path.suffix.lower()
+
+    # Determine the PDF to render from
+    if fmt == ".pdf":
+        pdf_path = source_path
+    else:
+        # Non-PDF: use the already-converted PDF in .stacks/converted/
+        converted_dir = get_converted_dir()
+        pdf_path = converted_dir / f"{source_path.stem}.pdf"
+        if not pdf_path.exists():
+            # Try to convert
+            try:
+                from stacks.converter import convert_to_pdf
+                pdf_path = convert_to_pdf(source_path, converted_dir)
+            except RuntimeError:
+                return {}
+
+    if on_progress:
+        on_progress("images", 0, 0)
+
+    try:
+        paths = render_page_images(pdf_path, images_dir, doc_id)
+    except Exception:
+        return {}
+
+    if on_progress:
+        on_progress("images_done", len(paths), len(paths))
+
+    # Map page_num (1-indexed) to relative path
+    result = {}
+    for i, p in enumerate(paths, 1):
+        try:
+            result[i] = str(p.relative_to(root))
+        except ValueError:
+            result[i] = str(p)
+    return result
 
 
 def ingest_document(
@@ -208,33 +250,43 @@ def ingest_document(
     doc_id: int,
     source_path: str | Path,
     on_progress=None,
+    generate_images: bool = True,
 ) -> int:
     """Extract text from all pages and store with embeddings.
 
     Uses native extraction for pptx/docx/xlsx, falls back to PDF.
+    on_progress(phase, current, total): phase is "extract", "images", "images_done", or "embed".
     Returns the number of pages ingested.
     """
     from stacks.converter import extract_pages_native
 
     source_path = Path(source_path)
+
+    if on_progress:
+        on_progress("extract", 0, 0)
+
     pages = extract_pages_native(source_path)
     total = len(pages)
     count = 0
+
+    # Generate page images
+    image_map = _generate_page_images(source_path, doc_id, on_progress=on_progress) if generate_images else {}
 
     for i, text in enumerate(pages, 1):
         if not text.strip():
             continue
         if not is_readable_text(text):
             continue
-        store_page(conn, doc_id=doc_id, page_num=i, content=text, summary=None)
+        img_path = image_map.get(i)
+        store_page(conn, doc_id=doc_id, page_num=i, content=text, summary=None, image_path=img_path)
         count += 1
         if on_progress:
-            on_progress(i, total)
+            on_progress("embed", i, total)
 
     return count
 
 
-def ingest_all(conn: sqlite3.Connection, path: str, on_progress=None) -> dict:
+def ingest_all(conn: sqlite3.Connection, path: str, on_progress=None, generate_images: bool = True) -> dict:
     """Prepare and ingest all files under path in one shot.
 
     Returns a summary dict with ingested/skipped lists.
@@ -243,16 +295,13 @@ def ingest_all(conn: sqlite3.Connection, path: str, on_progress=None) -> dict:
     result = prepare_files(conn, path)
 
     ingested = []
-    for f in result["files"]:
-        if f["total_pages"] > MAX_INGEST_PAGES:
-            result["skipped"].append({
-                "file": f["original"],
-                "reason": f"Too many pages: {f['total_pages']} (max {MAX_INGEST_PAGES})",
-            })
-            continue
+    total_files = len(result["files"])
+    for file_idx, f in enumerate(result["files"], 1):
         doc_id = f["doc_id"]
         source = root / f["original"]
-        count = ingest_document(conn, doc_id, source, on_progress=on_progress)
+        if on_progress:
+            on_progress("file", f["original"], total_files, file_idx)
+        count = ingest_document(conn, doc_id, source, on_progress=on_progress, generate_images=generate_images)
         ingested.append({
             "doc_id": doc_id,
             "original": f["original"],
@@ -275,18 +324,16 @@ def ingest_all(conn: sqlite3.Connection, path: str, on_progress=None) -> dict:
         # Already handled in this batch?
         if any(item["doc_id"] == doc_id for item in ingested):
             continue
-        if page_count > MAX_INGEST_PAGES:
-            result["skipped"].append({
-                "file": filepath,
-                "reason": f"Too many pages: {page_count} (max {MAX_INGEST_PAGES})",
-            })
-            continue
 
         source = root / filepath
         if not source.exists():
             continue
 
-        count = ingest_document(conn, doc_id, source, on_progress=on_progress)
+        total_files += 1
+        file_idx = total_files
+        if on_progress:
+            on_progress("file", filepath, total_files, file_idx)
+        count = ingest_document(conn, doc_id, source, on_progress=on_progress, generate_images=generate_images)
         ingested.append({
             "doc_id": doc_id,
             "original": filepath,

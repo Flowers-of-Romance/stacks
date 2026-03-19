@@ -26,6 +26,13 @@ def get_converted_dir() -> Path:
     return d
 
 
+def get_images_dir() -> Path:
+    """Return the path to the page images directory, creating it if needed."""
+    d = get_stacks_root() / ".stacks" / "images"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def resolve_filepath(path) -> Path:
     """Resolve a filepath relative to stacks root."""
     return get_stacks_root() / Path(path)
