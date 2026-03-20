@@ -312,6 +312,52 @@ def render_page_images(
     return paths
 
 
+def create_highlighted_pdf(
+    pdf_path: str | Path,
+    terms: list[str],
+    hit_pages: list[int] | None,
+    output_path: str | Path,
+) -> Path:
+    """Create a copy of a PDF with query terms highlighted in yellow.
+
+    Args:
+        pdf_path: Source PDF (not modified).
+        terms: Search terms to highlight.
+        hit_pages: 1-indexed page numbers to search (None = all pages).
+        output_path: Where to save the highlighted copy.
+
+    Returns the output path.
+    """
+    import fitz  # PyMuPDF
+
+    pdf_path = Path(pdf_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fitz.TOOLS.mupdf_display_errors(False)
+    fitz.TOOLS.mupdf_display_warnings(False)
+    try:
+        doc = fitz.open(pdf_path)
+        pages_to_search = (
+            [p - 1 for p in hit_pages if 0 < p <= len(doc)]
+            if hit_pages
+            else range(len(doc))
+        )
+        for page_idx in pages_to_search:
+            page = doc[page_idx]
+            for term in terms:
+                rects = page.search_for(term)
+                for rect in rects:
+                    page.add_highlight_annot(rect)
+        doc.save(str(output_path))
+        doc.close()
+    finally:
+        fitz.TOOLS.mupdf_display_errors(True)
+        fitz.TOOLS.mupdf_display_warnings(True)
+
+    return output_path
+
+
 def _chunk_text(text: str, chunk_size: int) -> list[str]:
     """Split text into chunks at paragraph boundaries."""
     paragraphs = text.split("\n")

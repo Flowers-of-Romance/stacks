@@ -1,6 +1,8 @@
 """Hybrid search: vector similarity + full-text search."""
+import hashlib
 import html
 import sqlite3
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,6 +124,60 @@ def _extract_snippet(content: str, query: str, length: int = 120) -> str:
     return snippet
 
 
+def generate_highlighted_pdfs(
+    results: list[SearchResult], query: str
+) -> dict[int, str]:
+    """Generate highlighted PDFs for search results.
+
+    Returns a mapping of doc_id -> highlighted PDF file URI.
+    """
+    from stacks.config import get_stacks_root, get_converted_dir, get_highlighted_dir
+
+    terms = [t for t in query.split() if t]
+    if not terms:
+        return {}
+
+    root = get_stacks_root()
+    highlighted_dir = get_highlighted_dir()
+    query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
+
+    # Group results by doc_id, collecting hit pages
+    doc_pages: dict[int, list[int]] = defaultdict(list)
+    doc_info: dict[int, SearchResult] = {}
+    for r in results:
+        doc_pages[r.doc_id].append(r.page_num)
+        if r.doc_id not in doc_info:
+            doc_info[r.doc_id] = r
+
+    result_map: dict[int, str] = {}
+    for doc_id, pages in doc_pages.items():
+        r = doc_info[doc_id]
+        output_path = highlighted_dir / f"{doc_id}_{query_hash}.pdf"
+
+        # Cache: skip if already exists
+        if output_path.exists():
+            result_map[doc_id] = output_path.as_uri()
+            continue
+
+        # Resolve source PDF
+        if r.filepath.lower().endswith(".pdf"):
+            pdf_path = root / r.filepath
+        else:
+            pdf_path = get_converted_dir() / f"{Path(r.filepath).stem}.pdf"
+
+        if not pdf_path.exists():
+            continue
+
+        try:
+            from stacks.converter import create_highlighted_pdf
+            create_highlighted_pdf(pdf_path, terms, pages, output_path)
+            result_map[doc_id] = output_path.as_uri()
+        except Exception:
+            continue
+
+    return result_map
+
+
 def format_results(results: list[SearchResult], query: str = "") -> str:
     """Format search results for CLI display."""
     if not results:
@@ -160,9 +216,14 @@ def _nav_image_uri(doc_id: int, page_num: int) -> str | None:
     return None
 
 
-def format_results_html(results: list[SearchResult], query: str = "") -> str:
+def format_results_html(
+    results: list[SearchResult],
+    query: str = "",
+    highlighted_pdfs: dict[int, str] | None = None,
+) -> str:
     """Generate an HTML report with page images and navigation."""
     q = html.escape(query)
+    highlighted_pdfs = highlighted_pdfs or {}
 
     from stacks.config import get_stacks_root
     root = get_stacks_root()
@@ -184,9 +245,11 @@ def format_results_html(results: list[SearchResult], query: str = "") -> str:
         relevance = 1.0 - r.distance
         filename = html.escape(r.filename)
         original_uri = (root / r.filepath).as_uri()
-        # PDF page link (for converted docs, link to the PDF in .stacks/converted/)
+        # PDF page link — prefer highlighted version if available
         pdf_uri = None
-        if r.filepath.lower().endswith(".pdf"):
+        if r.doc_id in highlighted_pdfs:
+            pdf_uri = highlighted_pdfs[r.doc_id] + f"#page={r.page_num}"
+        elif r.filepath.lower().endswith(".pdf"):
             pdf_uri = original_uri + f"#page={r.page_num}"
         else:
             from stacks.config import get_converted_dir
