@@ -94,7 +94,7 @@ def cmd_store(args):
 
 
 def cmd_search(args):
-    from stacks.search import search, format_results, format_results_html
+    from stacks.search import search, format_results, format_results_html, generate_highlighted_pdfs
     conn = get_connection()
     results = search(conn, args.query, limit=args.limit)
     conn.close()
@@ -105,13 +105,16 @@ def cmd_search(args):
     if not results:
         return
 
+    # Generate highlighted PDFs before HTML
+    highlighted_pdfs = generate_highlighted_pdfs(results, args.query)
+
     # Always generate HTML
     import re
     from stacks.config import get_stacks_root
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', args.query)[:80].strip()
     out = get_stacks_root() / ".stacks" / f"search_{safe_name}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(format_results_html(results, query=args.query), encoding="utf-8")
+    out.write_text(format_results_html(results, query=args.query, highlighted_pdfs=highlighted_pdfs), encoding="utf-8")
 
     has_images = any(r.image_path for r in results)
     if has_images and not args.no_browser:

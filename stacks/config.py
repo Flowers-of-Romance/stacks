@@ -26,6 +26,13 @@ def get_converted_dir() -> Path:
     return d
 
 
+def get_highlighted_dir() -> Path:
+    """Return the path to the highlighted PDF directory, creating it if needed."""
+    d = get_stacks_root() / ".stacks" / "highlighted"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_images_dir() -> Path:
     """Return the path to the page images directory, creating it if needed."""
     d = get_stacks_root() / ".stacks" / "images"
