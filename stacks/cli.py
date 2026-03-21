@@ -166,6 +166,16 @@ def cmd_quality(args):
         print(f"{'':>23} {preview}")
 
 
+def cmd_rebuild_fts(args):
+    from stacks.db import rebuild_fts
+    conn = get_connection()
+    init_db(conn)
+    count = rebuild_fts(conn)
+    conn.close()
+    from stacks.tokenizer import get_backend
+    print(f"Rebuilt FTS index: {count} pages (backend: {get_backend()})")
+
+
 def cmd_serve(args):
     from stacks.server import start_server
     start_server(port=args.port)
@@ -216,6 +226,8 @@ def create_parser() -> argparse.ArgumentParser:
     p_info = sub.add_parser("info", help="Show document details")
     p_info.add_argument("file_id", type=int, help="Document ID")
 
+    sub.add_parser("rebuild-fts", help="Rebuild FTS index with morphological analysis")
+
     return parser
 
 
@@ -245,6 +257,7 @@ def main():
             "serve": cmd_serve,
             "quality": cmd_quality,
             "info": cmd_info,
+            "rebuild-fts": cmd_rebuild_fts,
         }
         handlers[args.command](args)
     except Exception as e:

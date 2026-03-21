@@ -5,7 +5,7 @@
 ## 特徴
 
 - **ネイティブテキスト抽出** — PPTX（オートシェイプ含む）、DOCX、XLSXは直接解析。PDFはpdfminer.sixでCJKエンコーディングにも対応
-- **ハイブリッド検索** — ベクトル類似度（multilingual-e5-small + sqlite-vec）と全文検索（FTS5）を統合。意味的な検索とキーワード一致の両方に対応
+- **ハイブリッド検索** — ベクトル類似度（multilingual-e5-small + sqlite-vec）と全文検索（FTS5 + fugashi形態素解析）を統合。意味的な検索とキーワード一致の両方に対応。日本語は形態素単位でインデックスされるため「東京」で「東京都」がヒットする
 - **HTMLレポート** — 検索結果をページ画像付きでブラウザ表示。前後ページナビゲーション、クエリ語ハイライト、元ファイル・PDFページへのリンク
 - **品質スコア** — 取り込み時にページごとの品質を自動計算。文字化け・ゴミページを後から特定可能
 - **一括取り込み** — `ingest` コマンドでディレクトリ配下のファイルをまとめて処理
@@ -18,7 +18,7 @@ cd stacks
 pip install -e .
 ```
 
-依存パッケージ（`sentence-transformers`, `sqlite-vec`, `openpyxl`, `pdfminer.six`, `python-pptx`, `python-docx`, `pymupdf`）は `pip install -e .` で自動インストールされる。
+依存パッケージ（`sentence-transformers`, `sqlite-vec`, `openpyxl`, `pdfminer.six`, `python-pptx`, `python-docx`, `pymupdf`, `fugashi`, `unidic-lite`）は `pip install -e .` で自動インストールされる。
 
 初回のembedding計算時にモデル（multilingual-e5-small, 約100MB）が自動ダウンロードされる。
 
@@ -145,6 +145,7 @@ stacks quality --threshold 0.7
 | `info <doc_id>` | ドキュメント詳細 |
 | `quality` | 低品質ページ一覧（`--threshold` で閾値変更） |
 | `serve` | embeddingサーバー起動（`--port` でポート変更） |
+| `rebuild-fts` | FTSインデックスを形態素解析で再構築 |
 | `remove <doc_id>` | ドキュメントとページを削除 |
 
 ## 対応形式
@@ -185,4 +186,5 @@ $STACKS_ROOT/
 - SQLite + [sqlite-vec](https://github.com/asg017/sqlite-vec)
 - [sentence-transformers](https://www.sbert.net/)（multilingual-e5-small, 384次元）
 - [PyMuPDF](https://pymupdf.readthedocs.io/)（PDF→PNG画像レンダリング）
+- [fugashi](https://github.com/polm/fugashi)（MeCab形態素解析 → FTS5トークナイズ）
 - pdfminer.six / python-pptx / python-docx / openpyxl
