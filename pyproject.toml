@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stacks"
-version = "0.0.5"
+version = "0.0.6"
 description = "Ingesting documents (PDF/PPTX/DOCX/XLSX) into SQLite with semantic search via embeddings"
 requires-python = ">=3.10"
 license = "MIT"
@@ -16,6 +16,8 @@ dependencies = [
     "python-pptx",
     "python-docx",
     "pymupdf",
+    "fugashi",
+    "unidic-lite",
 ]
 
 [project.optional-dependencies]
