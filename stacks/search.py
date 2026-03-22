@@ -23,58 +23,64 @@ class SearchResult:
 
 
 def search(conn: sqlite3.Connection, query: str, limit: int = 5) -> list[SearchResult]:
-    """Hybrid search: combine vector similarity and full-text search."""
-    # Vector search
-    embedding = embed_text(query)
-    vec_rows = search_similar(conn, embedding, limit=limit * 3)
+    """Hybrid search: RRF scoring with document-level aggregation."""
+    from collections import defaultdict
 
-    # Full-text search (may fail if query has FTS syntax issues)
+    # Retrieve candidates (wider net than final limit)
+    embedding = embed_text(query)
+    candidate_limit = max(limit * 5, 30)
+    vec_rows = search_similar(conn, embedding, limit=candidate_limit)
+
     fts_rows = []
     try:
-        fts_rows = search_fts(conn, query, limit=limit * 3)
+        fts_rows = search_fts(conn, query, limit=candidate_limit)
     except Exception:
         pass
 
-    # Build score maps keyed by page_id
-    # Vector: normalize distance to 0-1 (lower = better)
-    vec_scores = {}
-    if vec_rows:
-        max_dist = max(r["distance"] for r in vec_rows) or 1.0
-        for r in vec_rows:
-            vec_scores[r["page_id"]] = 1.0 - (r["distance"] / max_dist)
+    # Step 1: Page-level RRF (Reciprocal Rank Fusion)
+    K = 60
+    page_scores = defaultdict(float)
+    page_data = {}
 
-    # FTS: normalize rank (FTS5 rank is negative, more negative = better)
-    fts_scores = {}
-    if fts_rows:
-        min_rank = min(r["fts_rank"] for r in fts_rows) or -1.0
-        for r in fts_rows:
-            fts_scores[r["page_id"]] = r["fts_rank"] / min_rank if min_rank != 0 else 0
+    for rank, r in enumerate(vec_rows, 1):
+        page_scores[r["page_id"]] += 1.0 / (K + rank)
+        page_data[r["page_id"]] = r
 
-    # Merge: collect all page_ids
-    all_pages = {}
-    for r in vec_rows:
-        all_pages[r["page_id"]] = r
-    for r in fts_rows:
-        if r["page_id"] not in all_pages:
-            all_pages[r["page_id"]] = r
+    for rank, r in enumerate(fts_rows, 1):
+        page_scores[r["page_id"]] += 1.0 / (K + rank)
+        if r["page_id"] not in page_data:
+            page_data[r["page_id"]] = r
 
-    # Combined score: vec * 0.5 + fts * 0.5
-    VEC_WEIGHT = 0.5
-    FTS_WEIGHT = 0.5
-    scored = []
-    for page_id, r in all_pages.items():
-        vs = vec_scores.get(page_id, 0.0)
-        fs = fts_scores.get(page_id, 0.0)
-        combined = vs * VEC_WEIGHT + fs * FTS_WEIGHT
-        scored.append((combined, r))
+    # Boost: pages in both sources get priority over single-source hits
+    fts_pids = {r["page_id"] for r in fts_rows}
+    vec_pids = {r["page_id"] for r in vec_rows}
+    for pid in fts_pids & vec_pids:
+        page_scores[pid] *= 1.5
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # Step 2: Document-level aggregation (top pages per doc, max 3)
+    MAX_PER_DOC = 3
+    doc_pages = defaultdict(list)
+    for pid, score in page_scores.items():
+        r = page_data[pid]
+        doc_pages[r["doc_id"]].append((score, r))
+    for doc_id in doc_pages:
+        doc_pages[doc_id].sort(key=lambda x: x[0], reverse=True)
+        doc_pages[doc_id] = doc_pages[doc_id][:MAX_PER_DOC]
+
+    # Step 3: Rank documents by best page, then expand
+    doc_scores = {did: pages[0][0] for did, pages in doc_pages.items()}
+    ranked_doc_ids = sorted(doc_scores, key=doc_scores.get, reverse=True)
+
+    results = []
+    for doc_id in ranked_doc_ids:
+        results.extend(doc_pages[doc_id])
 
     # Filter: drop results below 30% of top score
-    top = scored[:limit]
-    if top:
-        threshold = top[0][0] * 0.3
-        top = [(s, r) for s, r in top if s >= threshold]
+    if results:
+        threshold = results[0][0] * 0.3
+        results = [(s, r) for s, r in results if s >= threshold]
+
+    top = results[:limit]
 
     return [
         SearchResult(
@@ -84,7 +90,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 5) -> list[SearchR
             page_num=r["page_num"],
             content=r["content"],
             summary=r["summary"],
-            distance=1.0 - score,  # convert back to distance-like (lower = better)
+            distance=1.0 - score,
             image_path=r.get("image_path"),
         )
         for score, r in top
@@ -133,7 +139,9 @@ def generate_highlighted_pdfs(
     """
     from stacks.config import get_stacks_root, get_converted_dir, get_highlighted_dir
 
-    terms = [t for t in query.split() if t]
+    import unicodedata
+    normalized = unicodedata.normalize("NFKC", query)
+    terms = [t for t in normalized.split() if t]
     if not terms:
         return {}
 
@@ -141,11 +149,17 @@ def generate_highlighted_pdfs(
     highlighted_dir = get_highlighted_dir()
     query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
 
-    # Group results by doc_id, collecting hit pages
+    # Group results by doc_id, collecting hit pages (resolved to PDF pages)
     doc_pages: dict[int, list[int]] = defaultdict(list)
     doc_info: dict[int, SearchResult] = {}
     for r in results:
-        doc_pages[r.doc_id].append(r.page_num)
+        if r.filepath.lower().endswith(".pdf"):
+            doc_pages[r.doc_id].append(r.page_num)
+        else:
+            pdf_page = _find_pdf_page(r.content, r.filepath)
+            if pdf_page:
+                doc_pages[r.doc_id].append(pdf_page)
+            # If not found, hit_pages will be empty → fallback to all pages in create_highlighted_pdf
         if r.doc_id not in doc_info:
             doc_info[r.doc_id] = r
 
@@ -196,6 +210,53 @@ def format_results(results: list[SearchResult], query: str = "") -> str:
     return "\n".join(lines)
 
 
+def _find_pdf_page(content: str, filepath: str) -> int | None:
+    """Find which page of the converted PDF contains the chunk's text.
+
+    Returns 1-indexed page number, or None if not found.
+    """
+    from stacks.config import get_converted_dir
+    import unicodedata
+    import re as _re
+
+    converted_pdf = get_converted_dir() / f"{Path(filepath).stem}.pdf"
+    if not converted_pdf.exists():
+        return None
+
+    def _normalize(s):
+        """Normalize and strip whitespace for fuzzy matching."""
+        s = unicodedata.normalize("NFKC", s)
+        return _re.sub(r'\s+', '', s)
+
+    try:
+        import fitz
+        doc = fitz.open(str(converted_pdf))
+        text = content.strip()
+        # Skip [Sheet: ...] header
+        if text.startswith("[Sheet:"):
+            text = text[text.find("]") + 1:].strip()
+        # Extract multiple search fragments for robustness
+        normalized = _normalize(text)
+        if len(normalized) < 10:
+            doc.close()
+            return None
+
+        # Try fragments from multiple positions (start may differ between formats)
+        for start in range(0, min(len(normalized), 100), 10):
+            fragment = normalized[start:start + 30]
+            if len(fragment) < 10:
+                continue
+            for i in range(len(doc)):
+                page_normalized = _normalize(doc[i].get_text())
+                if fragment in page_normalized:
+                    doc.close()
+                    return i + 1
+        doc.close()
+    except Exception:
+        pass
+    return None
+
+
 def _resolve_image_path(image_path: str | None) -> str | None:
     """Resolve a relative image path to an absolute file URI."""
     if not image_path:
@@ -232,6 +293,9 @@ def format_results_html(
 
     def _highlight(text: str, query: str) -> str:
         """Wrap query terms in <mark> tags. text must already be HTML-escaped."""
+        import unicodedata as _ud
+        query = _ud.normalize("NFKC", query)
+        text = _ud.normalize("NFKC", text)
         terms = [html.escape(t) for t in query.split() if t]
         if not terms:
             return text
@@ -245,32 +309,44 @@ def format_results_html(
         relevance = 1.0 - r.distance
         filename = html.escape(r.filename)
         original_uri = (root / r.filepath).as_uri()
+        # Resolve the actual PDF page for this result
+        _is_native_pdf = r.filepath.lower().endswith(".pdf")
+        if _is_native_pdf:
+            _pdf_page = r.page_num
+        else:
+            _pdf_page = _find_pdf_page(r.content, r.filepath) or 1
+
         # PDF page link — prefer highlighted version if available
         pdf_uri = None
+        _page_frag = f"#page={_pdf_page}"
         if r.doc_id in highlighted_pdfs:
-            pdf_uri = highlighted_pdfs[r.doc_id] + f"#page={r.page_num}"
-        elif r.filepath.lower().endswith(".pdf"):
-            pdf_uri = original_uri + f"#page={r.page_num}"
+            pdf_uri = highlighted_pdfs[r.doc_id] + _page_frag
+        elif _is_native_pdf:
+            pdf_uri = original_uri + _page_frag
         else:
             from stacks.config import get_converted_dir
             converted_pdf = get_converted_dir() / f"{Path(r.filepath).stem}.pdf"
             if converted_pdf.exists():
-                pdf_uri = converted_pdf.as_uri() + f"#page={r.page_num}"
+                pdf_uri = converted_pdf.as_uri() + _page_frag
 
-        # Current page image
-        img_uri = _resolve_image_path(r.image_path)
-        img_html = f'<img src="{img_uri}" alt="Page {r.page_num}" class="page-img">' if img_uri else '<div class="no-img">No image</div>'
+        # Current page image — use resolved PDF page for non-native PDFs
+        _img_page = r.page_num if _is_native_pdf else _pdf_page
+        if _is_native_pdf:
+            img_uri = _resolve_image_path(r.image_path)
+        else:
+            img_uri = _nav_image_uri(r.doc_id, _img_page)
+        img_html = f'<img src="{img_uri}" alt="Page {_img_page}" class="page-img">' if img_uri else '<div class="no-img">No image</div>'
 
         # Navigation: prev/next
-        prev_uri = _nav_image_uri(r.doc_id, r.page_num - 1)
-        next_uri = _nav_image_uri(r.doc_id, r.page_num + 1)
+        prev_uri = _nav_image_uri(r.doc_id, _img_page - 1)
+        next_uri = _nav_image_uri(r.doc_id, _img_page + 1)
 
         nav_parts = []
         if prev_uri:
-            nav_parts.append(f'<a class="nav-btn" href="#" onclick="showNav(this, \'{prev_uri}\'); return false;">&#9664; p.{r.page_num - 1}</a>')
-        nav_parts.append(f'<span class="current-page">p.{r.page_num}</span>')
+            nav_parts.append(f'<a class="nav-btn" href="#" onclick="showNav(this, \'{prev_uri}\'); return false;">&#9664; p.{_img_page - 1}</a>')
+        nav_parts.append(f'<span class="current-page">p.{_img_page}</span>')
         if next_uri:
-            nav_parts.append(f'<a class="nav-btn" href="#" onclick="showNav(this, \'{next_uri}\'); return false;">p.{r.page_num + 1} &#9654;</a>')
+            nav_parts.append(f'<a class="nav-btn" href="#" onclick="showNav(this, \'{next_uri}\'); return false;">p.{_img_page + 1} &#9654;</a>')
         nav_html = " ".join(nav_parts)
 
         cards.append(f"""
@@ -278,7 +354,7 @@ def format_results_html(
           <div class="result-header">
             <span class="file-links">
               <span class="filename copy-path" title="Click to copy path" onclick="copyPath(this, '{html.escape(str(root / r.filepath))}')">{filename}</span>
-              {f'<a class="pdf-link" href="{pdf_uri}">PDF p.{r.page_num}</a>' if pdf_uri else ''}
+              {f'<a class="pdf-link" href="{pdf_uri}">PDF p.{_pdf_page}</a>' if pdf_uri else ''}
             </span>
             <span class="score">score: {relevance:.3f}</span>
           </div>

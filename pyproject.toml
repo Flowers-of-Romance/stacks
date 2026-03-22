@@ -16,8 +16,6 @@ dependencies = [
     "python-pptx",
     "python-docx",
     "pymupdf",
-    "fugashi",
-    "unidic-lite",
 ]
 
 [project.optional-dependencies]
