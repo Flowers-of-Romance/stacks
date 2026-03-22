@@ -6,7 +6,9 @@ import sqlite3
 from pathlib import Path
 
 from stacks.config import get_stacks_root, get_converted_dir, get_images_dir
-from stacks.converter import is_supported_format, check_excel_limits, convert_to_pdf, get_page_count
+from stacks.converter import is_supported_format, convert_to_pdf, get_page_count
+
+MAX_INGEST_PAGES = 1000
 from stacks.db import insert_document, find_document_by_hash, insert_page, insert_embedding
 from stacks.embedder import embed_text
 
@@ -140,13 +142,6 @@ def prepare_files(conn: sqlite3.Connection, path: str) -> dict:
             continue
 
         fmt = fpath.suffix.lower().lstrip(".")
-
-        # Excel limits
-        if fmt in ("xlsx", "xls"):
-            ok, reason = check_excel_limits(fpath)
-            if not ok:
-                skipped.append({"file": str(rel), "reason": reason})
-                continue
 
         # PDF conversion
         if fmt == "pdf":
@@ -297,6 +292,12 @@ def ingest_all(conn: sqlite3.Connection, path: str, on_progress=None, generate_i
     ingested = []
     total_files = len(result["files"])
     for file_idx, f in enumerate(result["files"], 1):
+        if f["total_pages"] > MAX_INGEST_PAGES:
+            result["skipped"].append({
+                "file": f["original"],
+                "reason": f"Too many pages: {f['total_pages']} (max {MAX_INGEST_PAGES})",
+            })
+            continue
         doc_id = f["doc_id"]
         source = root / f["original"]
         if on_progress:
@@ -323,6 +324,12 @@ def ingest_all(conn: sqlite3.Connection, path: str, on_progress=None, generate_i
         page_count = row[3] or 0
         # Already handled in this batch?
         if any(item["doc_id"] == doc_id for item in ingested):
+            continue
+        if page_count > MAX_INGEST_PAGES:
+            result["skipped"].append({
+                "file": filepath,
+                "reason": f"Too many pages: {page_count} (max {MAX_INGEST_PAGES})",
+            })
             continue
 
         source = root / filepath

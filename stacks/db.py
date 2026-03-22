@@ -6,7 +6,6 @@ from pathlib import Path
 import sqlite_vec
 
 from stacks.config import get_db_path
-from stacks.tokenizer import tokenize
 
 EMBEDDING_DIM = 384
 
@@ -126,10 +125,10 @@ def insert_page(
         (doc_id, page_num, sheet_name, content, summary, content_type, token_count, quality_score, image_path),
     )
     page_id = cur.lastrowid
-    # Sync FTS index (形態素解析済みテキストを投入)
+    # Sync FTS index
     conn.execute(
         "INSERT INTO pages_fts (rowid, content) VALUES (?, ?)",
-        (page_id, tokenize(content)),
+        (page_id, content),
     )
     conn.commit()
     return page_id
@@ -190,9 +189,6 @@ def search_fts(
     conn: sqlite3.Connection, query: str, limit: int = 20
 ) -> list[dict]:
     """Full-text search using FTS5. Returns pages with BM25 rank."""
-    tokenized_query = tokenize(query)
-    if not tokenized_query.strip():
-        return []
     rows = conn.execute(
         """
         SELECT
@@ -212,7 +208,7 @@ def search_fts(
         ORDER BY rank
         LIMIT ?
         """,
-        (tokenized_query, limit),
+        (query, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -243,16 +239,3 @@ def search_similar(
         (_serialize_embedding(embedding), limit),
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-def rebuild_fts(conn: sqlite3.Connection) -> int:
-    """既存ページのFTSインデックスを形態素解析で再構築する。戻り値は処理件数。"""
-    conn.execute("DELETE FROM pages_fts")
-    rows = conn.execute("SELECT id, content FROM pages ORDER BY id").fetchall()
-    for row in rows:
-        conn.execute(
-            "INSERT INTO pages_fts (rowid, content) VALUES (?, ?)",
-            (row[0], tokenize(row[1])),
-        )
-    conn.commit()
-    return len(rows)

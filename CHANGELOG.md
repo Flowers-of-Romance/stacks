@@ -1,11 +1,15 @@
 # Changelog
 
-## 0.0.6 — 2026-03-21
+## 0.0.6 — 2026-03-22
 
-- 日本語形態素解析によるFTS5全文検索の改善（fugashi/MeCab）
-- `rebuild-fts` コマンド追加（既存DBのFTSインデックスを形態素解析で再構築）
-- fugashi未インストール時は簡易正規表現トークナイザにフォールバック
-- 依存追加: `fugashi`, `unidic-lite`
+- 検索スコアリングをRRF（Reciprocal Rank Fusion）+ ドキュメントレベル集約に変更。xlsxチャンクの数の暴力を解消し、PDFが正しく上位に
+- 同一ドキュメントから最大3ページまで検索結果に表示
+- XLSX/DOCX/PPTXの検索結果から変換PDFの正しいページを自動特定（画像・リンク・ナビゲーションが正確なページに連動）
+- PDFハイライトのChrome表示対応（`annot.update()` 追加）
+- 検索クエリとPDFハイライト用termsをNFKC正規化（康熙部首等のUnicode異体字に対応）
+- HTMLスニペットのハイライトをNFKC正規化対応
+- `MAX_INGEST_PAGES = 1000` 復活（巨大xlsxを除外）
+- 非実効的な `check_excel_limits` を削除
 
 ## 0.0.5 — 2026-03-21
 
@@ -26,7 +30,7 @@
 - `stacks init --reset` でDB・画像を削除して再初期化
 - 大きなExcelシートを2000文字単位でチャンク分割（検索精度向上）
 - ingestのプログレス表示改善（ファイル番号・フェーズ表示）
-- ページ数上限（MAX_INGEST_PAGES）を撤廃
+- ページ数上限（MAX_INGEST_PAGES）を撤廃（v0.0.6で復活）
 - PyMuPDFの警告メッセージ抑制
 - 依存追加: `pymupdf`
 

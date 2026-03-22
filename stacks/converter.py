@@ -338,17 +338,18 @@ def create_highlighted_pdf(
     fitz.TOOLS.mupdf_display_warnings(False)
     try:
         doc = fitz.open(pdf_path)
-        pages_to_search = (
-            [p - 1 for p in hit_pages if 0 < p <= len(doc)]
-            if hit_pages
-            else range(len(doc))
-        )
+        if hit_pages:
+            valid = [p - 1 for p in hit_pages if 0 < p <= len(doc)]
+            pages_to_search = valid if valid else range(len(doc))
+        else:
+            pages_to_search = range(len(doc))
         for page_idx in pages_to_search:
             page = doc[page_idx]
             for term in terms:
                 rects = page.search_for(term)
                 for rect in rects:
-                    page.add_highlight_annot(rect)
+                    annot = page.add_highlight_annot(rect)
+                    annot.update()
         doc.save(str(output_path))
         doc.close()
     finally:
