@@ -13,7 +13,7 @@
 ## セットアップ
 
 ```bash
-git clone https://github.com/Flowers-of-Romance/stacks.git
+git clone https://github.com/0x006a6d/stacks.git
 cd stacks
 pip install -e .
 ```
